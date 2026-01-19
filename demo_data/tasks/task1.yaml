@@ -1,0 +1,18 @@
+# Task 1: Activation Energy Analysis
+# This task demonstrates research + computation workflow
+
+task: "What methods are commonly used to calculate activation energy from thermal analysis data, and what are typical activation energy values for polymer decomposition?"
+
+description: |
+  This task explores the methodology for determining activation energy
+  from thermal analysis experiments (TGA, DSC) and collects typical
+  values from the literature for polymer decomposition processes.
+
+seed: 42
+corpus_dir: demo_data/corpus
+
+# Expected workflow:
+# 1. Planner decomposes into research + computation subtasks
+# 2. Researcher searches corpus for activation energy methods
+# 3. Executor runs Arrhenius calculation example
+# 4. Auditor validates evidence quality

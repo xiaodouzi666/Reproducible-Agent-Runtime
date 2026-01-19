@@ -1,0 +1,18 @@
+# Task 2: Thermal Stability Comparison
+# This task demonstrates multi-source research workflow
+
+task: "Compare the thermal stability and decomposition mechanisms of different polymer materials. What factors influence thermal degradation temperature?"
+
+description: |
+  This task compares thermal stability characteristics across
+  different polymer materials and identifies key factors that
+  affect decomposition temperature.
+
+seed: 123
+corpus_dir: demo_data/corpus
+
+# Expected workflow:
+# 1. Planner creates multiple research subtasks
+# 2. Researcher searches for thermal stability data
+# 3. Researcher searches for decomposition mechanisms
+# 4. Auditor validates and cross-references findings

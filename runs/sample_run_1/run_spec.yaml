@@ -1,0 +1,5 @@
+corpus_dir: demo_data/corpus
+run_id: sample_run_1
+seed: 42
+task: What methods are commonly used to calculate activation energy from thermal analysis
+  data?

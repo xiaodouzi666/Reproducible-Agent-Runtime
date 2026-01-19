@@ -1,0 +1,18 @@
+# Task 3: Machine Learning in Materials Science
+# This task demonstrates research-only workflow
+
+task: "How are machine learning methods being applied to predict material properties and accelerate materials discovery?"
+
+description: |
+  This task explores the application of machine learning
+  techniques in materials science, particularly for
+  property prediction and materials discovery.
+
+seed: 256
+corpus_dir: demo_data/corpus
+
+# Expected workflow:
+# 1. Planner decomposes into research subtasks
+# 2. Researcher searches for ML methods in materials
+# 3. Researcher searches for property prediction approaches
+# 4. Auditor validates evidence quality

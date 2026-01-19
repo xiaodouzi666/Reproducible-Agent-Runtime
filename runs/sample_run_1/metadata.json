@@ -1,0 +1,23 @@
+{
+  "run_id": "sample_run_1",
+  "task_description": "What methods are commonly used to calculate activation energy from thermal analysis data?",
+  "start_time": "2024-01-15T10:30:00.000000",
+  "end_time": "2024-01-15T10:30:15.234567",
+  "status": "completed",
+  "spec_file": "demo_data/tasks/task1.yaml",
+  "seed": 42,
+  "llm_mode": false,
+  "total_steps": 18,
+  "total_latency_ms": 1523.45,
+  "total_cost": 0.0,
+  "agents_used": ["planner", "researcher", "executor", "auditor"],
+  "tools_used": ["local_search", "python_exec"],
+  "final_answer": "# Task: What methods are commonly used to calculate activation energy from thermal analysis data?\n\n## Findings\n\n### subtask_1\nResearch findings for: methods calculate activation energy thermal analysis\n\n[1] Thermal Analysis Methods (relevance: 0.85)\n   The Kissinger method and Flynn-Wall-Ozawa (FWO) method are commonly used isoconversional approaches for determining activation energy from TGA data. The Kissinger method uses the relationship between heating rate and peak decomposition temperature.\n\n[2] Activation Energy Calculation (relevance: 0.78)\n   Activation energy values for polymer decomposition typically range from 100-300 kJ/mol depending on the material and decomposition mechanism.\n\n### subtask_2\nOutput:\nActivation Energy (Ea): 125.34 kJ/mol\nPre-exponential factor (A): 2.45e+12 s^-1\nR-squared: 0.9876\n\nComputed values:\n  Ea_kJ_mol = 125.34\n  A = 2.45e+12\n  R_squared = 0.9876\n\n## Evidence Sources\n\n1. [Thermal Analysis Methods] - paragraph_3\n2. [Polymer Decomposition Study] - paragraph_5\n3. [Kinetic Analysis Review] - paragraph_2\n\n## Audit Notes\n\n- All evidence sources verified with relevance score > 0.3",
+  "evidence_summary": [
+    {"doc_id": "s10973-024-13630-6", "doc_title": "Thermal Analysis Methods", "location": "paragraph_3"},
+    {"doc_id": "polymers-11-00281-v2", "doc_title": "Polymer Decomposition Study", "location": "paragraph_5"}
+  ],
+  "is_replay": false,
+  "original_run_id": "",
+  "matches_original": null
+}
