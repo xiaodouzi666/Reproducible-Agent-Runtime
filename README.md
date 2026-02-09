@@ -29,7 +29,7 @@ python run.py run "What methods are used to calculate activation energy?"
 
 ## Public Demo
 
-- **Public Project Link (replace before submission):** `<YOUR_PUBLIC_DEMO_URL>`
+- **Public Project Link:** [YouTube Demo](https://www.youtube.com/watch?v=BDPJ2wSYzlM)
 - The demo link should be publicly accessible without login or paywall.
 - Recommended default demo path: run -> trace -> evidence -> replay/diff.
 
