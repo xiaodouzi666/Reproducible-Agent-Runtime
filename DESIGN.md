@@ -274,19 +274,19 @@ The activation energy is 125.34 kJ/mol [1][2].
 
 ### 8.1 Current MVP Scope
 
-当前 demo 展示 MVP 闭环（RunSpec/Trace/Replay/Diff + 协作可审计），核心功能包括:
-- **RunSpec**: YAML 格式的任务规格，支持固定 seed 和 corpus 配置
-- **Trace**: JSONL 格式全程记录，每步包含 agent/tool/performative/evidence
-- **Replay**: 一键复跑，deterministic 输出一致性验证
-- **Diff**: 多维度对比（答案/步骤/成本/工具/证据）
-- **协作可审计**: BDI 状态可见，Contract Net 流程可追溯，ACL 消息带 performative
+The current demo provides an MVP closed loop (RunSpec/Trace/Replay/Diff + auditable collaboration). Core capabilities include:
+- **RunSpec**: YAML task specification with fixed seed and corpus configuration.
+- **Trace**: End-to-end JSONL logging, with per-step agent/tool/performative/evidence records.
+- **Replay**: One-command rerun for deterministic consistency checks.
+- **Diff**: Multi-dimensional comparison (answer/steps/cost/tools/evidence).
+- **Auditable collaboration**: Visible BDI state, traceable Contract Net flow, and ACL messages with performatives.
 
-### 8.2 可扩展项（Future Extensions）
+### 8.2 Future Extensions
 
-1. **Artifact Store (冷热分层)**: 大文件/模型权重分层存储，trace 只记引用
-2. **Dashboard**: 实时监控多 run 并行执行，可视化 agent 交互拓扑
-3. **Dung 论证仲裁**: 基于 argumentation framework 的冲突检测与裁决
-4. **LLM Integration**: 可选 OpenAI/Anthropic 增强 planner 智能规划
-5. **Distributed Execution**: 跨机器分布式 agent 调度
-6. **Real-time Collaboration**: 多用户同时观察/干预执行
-7. **Formal Verification**: 形式化证明 reproducibility 属性
+1. **Artifact Store (hot/cold tiering)**: Tiered storage for large files/model weights; trace stores references only.
+2. **Dashboard**: Real-time monitoring for concurrent runs and visualization of agent interaction topology.
+3. **Dung-style argument adjudication**: Conflict detection and resolution based on argumentation frameworks.
+4. **LLM Integration**: Optional OpenAI/Anthropic integrations for stronger planner intelligence.
+5. **Distributed Execution**: Cross-machine distributed agent scheduling.
+6. **Real-time Collaboration**: Multi-user observation/intervention during execution.
+7. **Formal Verification**: Formal proofs for reproducibility properties.

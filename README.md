@@ -217,7 +217,7 @@ The `runs/sample_run_1/` directory contains a pre-generated trace that can be vi
 
 ## MVP Scope
 
-当前 demo 展示 MVP 闭环（RunSpec/Trace/Replay/Diff + 协作可审计），可扩展 Artifact Store(冷热分层)/Dashboard/Dung 论证仲裁等。详见 [DESIGN.md](DESIGN.md) 第 8 节。
+The current demo delivers an MVP closed loop (RunSpec/Trace/Replay/Diff + auditable collaboration), with room to extend Artifact Store (hot/cold tiering), dashboards, and Dung-style argument adjudication. See Section 8 in [DESIGN.md](DESIGN.md).
 
 ## License
 

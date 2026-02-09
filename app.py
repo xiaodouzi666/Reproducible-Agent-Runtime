@@ -36,6 +36,8 @@ if "current_run_id" not in st.session_state:
     st.session_state.current_run_id = None
 if "run_history" not in st.session_state:
     st.session_state.run_history = []
+if "history_selected_run_id" not in st.session_state:
+    st.session_state.history_selected_run_id = None
 
 
 # Initialize components
@@ -208,6 +210,47 @@ def _cache_hit_value(entry):
     return None
 
 
+def _load_run_result_for_display(run_id: str, store: TraceStore) -> Optional[dict]:
+    """Load a run summary payload that can be rendered by render_run_result."""
+    metadata = store.get_metadata(run_id)
+    if not metadata:
+        return None
+
+    answer = metadata.final_answer or ""
+    evidence = []
+
+    final_path = Path("runs") / run_id / "final.json"
+    if final_path.exists():
+        try:
+            final_data = json.loads(final_path.read_text(encoding="utf-8"))
+            answer = str(final_data.get("answer", answer) or "")
+            raw_evidence = final_data.get("evidence_anchors", [])
+            if isinstance(raw_evidence, list):
+                evidence = raw_evidence
+        except Exception:
+            pass
+
+    return {
+        "success": metadata.status != "failed",
+        "run_id": run_id,
+        "final_answer": answer,
+        "evidence": evidence,
+    }
+
+
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    """Parse ISO datetime string to datetime object (best-effort)."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
 def render_sidebar():
     """Render the sidebar with navigation and controls."""
     st.sidebar.title("🔬 RAR Demo")
@@ -235,15 +278,23 @@ def render_run_page():
     """Render the task execution page."""
     st.header("🚀 Run New Task")
 
+    if "run_task_input" not in st.session_state:
+        st.session_state.run_task_input = ""
+    if "run_task_input_pending" in st.session_state:
+        st.session_state.run_task_input = str(st.session_state.get("run_task_input_pending", "") or "")
+        del st.session_state["run_task_input_pending"]
+
     col1, col2 = st.columns([2, 1])
 
     with col1:
         # Task input
-        task = st.text_area(
+        st.text_area(
             "Task Description",
             placeholder="Enter your scientific question or task...\n\nExample: What is the activation energy for thermal decomposition of polymers?",
-            height=100
+            height=100,
+            key="run_task_input",
         )
+        task = str(st.session_state.get("run_task_input", "") or "")
 
         # Example tasks
         st.markdown("**Quick examples:**")
@@ -255,7 +306,7 @@ def render_run_page():
         ]
         for i, (col, example) in enumerate(zip(example_cols, examples)):
             if col.button(f"Example {i+1}", key=f"ex_{i}", use_container_width=True):
-                task = example
+                st.session_state.run_task_input_pending = example
                 st.rerun()
 
     with col2:
@@ -290,7 +341,7 @@ def render_run_page():
         verbose = st.checkbox("Show detailed trace", value=True)
 
     # Run button
-    if st.button("▶️ Run Task", type="primary", disabled=not task):
+    if st.button("▶️ Run Task", type="primary", disabled=not task.strip()):
         with st.spinner("Running multi-agent workflow..."):
             orchestrator = Orchestrator(
                 corpus_dir="demo_data/corpus",
@@ -1021,8 +1072,8 @@ def render_history_page():
         st.info("No runs yet. Start by running a task!")
         return
 
-    # Filter options
-    col1, col2 = st.columns(2)
+    # Filter and sort options
+    col1, col2, col3 = st.columns(3)
     with col1:
         status_options = ["completed", "completed_with_warnings", "waiting", "failed", "running"]
         status_filter = st.multiselect(
@@ -1032,15 +1083,61 @@ def render_history_page():
         )
     with col2:
         limit = st.slider("Show runs", 5, 50, 20)
+    with col3:
+        sort_option = st.selectbox(
+            "Sort runs by",
+            options=[
+                "Start Time (Newest)",
+                "Start Time (Oldest)",
+                "End Time (Newest)",
+                "End Time (Oldest)",
+                "Run ID (Newest)",
+                "Run ID (Oldest)",
+            ],
+            index=0,
+        )
 
-    # Display runs
-    for run_id in runs[:limit]:
+    selected_run_id = st.session_state.get("history_selected_run_id")
+    if selected_run_id:
+        st.markdown("---")
+        dcol1, dcol2 = st.columns([4, 1])
+        with dcol1:
+            st.markdown(f"### Selected Run Details: `{selected_run_id}`")
+        with dcol2:
+            if st.button("Clear Selection", key="clear_history_selection"):
+                st.session_state.history_selected_run_id = None
+                st.rerun()
+
+        detail_result = _load_run_result_for_display(selected_run_id, store)
+        if detail_result:
+            render_run_result(detail_result, verbose=True)
+        else:
+            st.warning(f"Unable to load details for run `{selected_run_id}`.")
+        st.markdown("---")
+
+    # Build filtered list with metadata, then sort.
+    run_items = []
+    for run_id in runs:
         metadata = store.get_metadata(run_id)
         if not metadata:
             continue
-
         if status_filter and metadata.status not in status_filter:
             continue
+        run_items.append((run_id, metadata))
+
+    def _sort_key(item):
+        run_id, metadata = item
+        if sort_option.startswith("Start Time"):
+            return _parse_iso_datetime(getattr(metadata, "start_time", "")) or datetime.min
+        if sort_option.startswith("End Time"):
+            return _parse_iso_datetime(getattr(metadata, "end_time", "")) or datetime.min
+        return run_id
+
+    reverse = sort_option.endswith("(Newest)")
+    run_items.sort(key=_sort_key, reverse=reverse)
+
+    # Display runs
+    for run_id, metadata in run_items[:limit]:
 
         if metadata.status == "completed":
             status_icon = "✅"
@@ -1071,11 +1168,45 @@ def render_history_page():
 
             if bcol1.button("View Details", key=f"view_{run_id}"):
                 st.session_state.current_run_id = run_id
-                # Would navigate to detail view
+                st.session_state.history_selected_run_id = run_id
+                st.rerun()
 
             if bcol2.button("Replay", key=f"replay_{run_id}"):
-                # Trigger replay
-                pass
+                with st.spinner(f"Replaying {run_id}..."):
+                    replay_engine = ReplayEngine(store=store)
+                    replay_result = replay_engine.replay(run_id)
+
+                if replay_result.get("success"):
+                    new_run_id = replay_result.get("run_id")
+                    if new_run_id:
+                        st.session_state.current_run_id = new_run_id
+                        st.session_state.history_selected_run_id = new_run_id
+                        if new_run_id not in st.session_state.run_history:
+                            st.session_state.run_history.append(new_run_id)
+
+                    st.success(f"Replay completed: {new_run_id or 'N/A'}")
+                    rcol1, rcol2 = st.columns(2)
+                    with rcol1:
+                        st.metric(
+                            "Matches Original",
+                            "Yes" if replay_result.get("matches_original") else "No",
+                        )
+                    with rcol2:
+                        diff_summary = replay_result.get("diff_summary", {}) or {}
+                        st.metric(
+                            "Step Differences",
+                            len(diff_summary.get("step_differences", []) or []),
+                        )
+
+                    cache_stats = replay_result.get("llm_cache_stats", {}) or {}
+                    if cache_stats:
+                        st.caption(
+                            "LLM cache hit rate: "
+                            f"{cache_stats.get('cache_hits', 0)}/{cache_stats.get('llm_calls', 0)} "
+                            f"({cache_stats.get('cache_hit_rate', 0.0):.1%})"
+                        )
+                else:
+                    st.error(f"Replay failed: {replay_result.get('error', 'unknown error')}")
 
             checkpoint_exists = (Path("runs") / run_id / "checkpoint.json").exists()
             can_resume = metadata.status == "waiting" or checkpoint_exists
