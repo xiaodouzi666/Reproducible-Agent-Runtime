@@ -29,6 +29,10 @@ class Tracer:
         spec_file: str = "",
         seed: Optional[int] = None,
         llm_mode: bool = False,
+        owl_mode: str = "",
+        llm_provider: str = "",
+        llm_model: str = "",
+        llm_thinking_level: str = "",
         is_replay: bool = False,
         original_run_id: str = ""
     ) -> str:
@@ -40,6 +44,10 @@ class Tracer:
             spec_file=spec_file,
             seed=seed,
             llm_mode=llm_mode,
+            owl_mode=owl_mode,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            llm_thinking_level=llm_thinking_level,
             is_replay=is_replay,
             original_run_id=original_run_id
         )
@@ -59,7 +67,11 @@ class Tracer:
         self,
         status: str = "completed",
         final_answer: str = "",
-        evidence_summary: list = None
+        evidence_summary: list = None,
+        finalize_missing: Optional[bool] = None,
+        llm_finalize_called: Optional[bool] = None,
+        argument_graph_generated: Optional[bool] = None,
+        next_run_at: str = "",
     ):
         """Finalize a run."""
         if self._metadata:
@@ -68,6 +80,13 @@ class Tracer:
             self._metadata.total_steps = self._step_counter
             self._metadata.final_answer = final_answer
             self._metadata.evidence_summary = evidence_summary or []
+            if finalize_missing is not None:
+                self._metadata.finalize_missing = bool(finalize_missing)
+            if llm_finalize_called is not None:
+                self._metadata.llm_finalize_called = bool(llm_finalize_called)
+            if argument_graph_generated is not None:
+                self._metadata.argument_graph_generated = bool(argument_graph_generated)
+            self._metadata.next_run_at = str(next_run_at or "")
 
             # Calculate totals
             entries = self.store.get_entries(self.run_id)
@@ -284,6 +303,193 @@ class Tracer:
             evidence_anchors=evidence_anchors or [],
             artifacts=artifacts or {},
             content_summary=f"Tool result: {tool_name} ({'success' if success else 'error'})"
+        )
+
+    # ===== LLM logging =====
+
+    def log_llm_call(
+        self,
+        agent_id: str,
+        model: str,
+        thinking_level: str,
+        cache_key: str,
+        prompt_summary: str,
+        tool_schema_names: list[str] = None,
+        request: dict = None,
+        config: dict = None,
+    ):
+        """Log an LLM request."""
+        return self._log(
+            event_type=TraceEventType.LLM_CALL,
+            agent_id=agent_id,
+            tool_name="gemini",
+            content={
+                "prompt_summary": prompt_summary,
+                "tool_schema_names": tool_schema_names or [],
+                "request": request or {},
+                "config": config or {},
+            },
+            llm={
+                "provider": "gemini",
+                "model": model,
+                "thinking_level": thinking_level,
+                "cache_key": cache_key,
+                "request_hash": cache_key,
+                "tool_schema_names": tool_schema_names or [],
+                "is_cache_hit": False,
+            },
+            content_summary=f"LLM call: {model} ({thinking_level})",
+        )
+
+    def log_llm_result(
+        self,
+        agent_id: str,
+        cache_key: str,
+        response_text_summary: str,
+        response_hash: str,
+        usage: dict = None,
+        model: str = "",
+        thinking_level: str = "",
+        deterministic: bool = False,
+        latency_ms: float = 0.0,
+        response_text: str = "",
+        response_raw: Any = None,
+    ):
+        """Log an LLM response."""
+        return self._log(
+            event_type=TraceEventType.LLM_RESULT,
+            agent_id=agent_id,
+            tool_name="gemini",
+            content={
+                "response_text_summary": response_text_summary,
+                "response_text": response_text,
+                "response_raw": response_raw,
+            },
+            llm={
+                "provider": "gemini",
+                "model": model,
+                "thinking_level": thinking_level,
+                "cache_key": cache_key,
+                "request_hash": cache_key,
+                "usage": usage or {},
+                "response_hash": response_hash,
+                "is_cache_hit": False,
+            },
+            output_hash=response_hash,
+            deterministic=deterministic,
+            latency_ms=latency_ms,
+            content_summary=f"LLM result: {response_hash[:12]}",
+        )
+
+    def log_llm_cache_hit(
+        self,
+        agent_id: str,
+        model: str,
+        thinking_level: str,
+        cache_key: str,
+        response_hash: str,
+        usage: dict = None,
+        latency_ms: float = 0.0,
+    ):
+        """Log an LLM cache hit event."""
+        return self._log(
+            event_type=TraceEventType.LLM_CACHE_HIT,
+            agent_id=agent_id,
+            tool_name="gemini",
+            llm={
+                "provider": "gemini",
+                "model": model,
+                "thinking_level": thinking_level,
+                "cache_key": cache_key,
+                "request_hash": cache_key,
+                "usage": usage or {},
+                "response_hash": response_hash,
+                "is_cache_hit": True,
+            },
+            output_hash=response_hash,
+            deterministic=True,
+            latency_ms=latency_ms,
+            content_summary=f"LLM cache hit: {response_hash[:12]}",
+        )
+
+    def log_schema_violation(
+        self,
+        agent_id: str,
+        schema_name: str,
+        attempt: int,
+        max_attempts: int,
+        error: str,
+        cache_key: str = "",
+        model: str = "",
+        thinking_level: str = "",
+        response_hash: str = "",
+        response_text_preview: str = "",
+    ):
+        """Log structured-output schema validation violation."""
+        return self._log(
+            event_type=TraceEventType.SCHEMA_VIOLATION,
+            agent_id=agent_id,
+            tool_name="gemini",
+            status="error",
+            error_message=error,
+            content={
+                "schema_name": schema_name,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "error": error,
+                "response_text_preview": response_text_preview,
+            },
+            llm={
+                "provider": "gemini",
+                "model": model,
+                "thinking_level": thinking_level,
+                "cache_key": cache_key,
+                "request_hash": cache_key,
+                "response_hash": response_hash,
+                "is_cache_hit": False,
+            },
+            output_hash=response_hash,
+            deterministic=False,
+            content_summary=(
+                f"Schema violation ({schema_name}) attempt {attempt}/{max_attempts}: "
+                f"{(error or '')[:80]}"
+            ),
+        )
+
+    def log_argument_graph_ok(
+        self,
+        agent_id: str,
+        node_count: int,
+        edge_count: int,
+        graph_ref: str,
+    ):
+        """Log successful argument-graph generation."""
+        return self._log(
+            event_type=TraceEventType.ARG_GRAPH_OK,
+            agent_id=agent_id,
+            tool_name="gemini",
+            content={
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "graph_ref": graph_ref,
+            },
+            content_summary=f"Argument graph generated: {node_count} node(s), {edge_count} edge(s)",
+        )
+
+    def log_argument_graph_failed(
+        self,
+        agent_id: str,
+        reason: str,
+    ):
+        """Log argument-graph generation failure."""
+        return self._log(
+            event_type=TraceEventType.ARG_GRAPH_FAILED,
+            agent_id=agent_id,
+            tool_name="gemini",
+            status="error",
+            error_message=reason,
+            content={"reason": reason},
+            content_summary=f"Argument graph failed: {(reason or '')[:80]}",
         )
 
     # ===== Task logging =====

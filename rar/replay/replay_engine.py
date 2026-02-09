@@ -54,10 +54,35 @@ class ReplayEngine:
         # Generate new run ID
         new_run_id = new_run_id or f"replay_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
+        original_run_dir = self.output_dir / original_run_id
+        original_spec = {}
+        original_spec_path = original_run_dir / "run_spec.yaml"
+        if original_spec_path.exists():
+            try:
+                with open(original_spec_path, "r", encoding="utf-8") as f:
+                    original_spec = yaml.safe_load(f) or {}
+            except Exception:
+                original_spec = {}
+
+        readonly_cache_paths = []
+        original_cache_path = original_run_dir / "llm_cache.jsonl"
+        if original_cache_path.exists() and original_cache_path.stat().st_size > 0:
+            readonly_cache_paths.append(str(original_cache_path))
+
         # Create orchestrator with same configuration
         orchestrator = Orchestrator(
+            corpus_dir=original_spec.get("corpus_dir", "demo_data/corpus"),
             output_dir=str(self.output_dir),
-            seed=original_metadata.seed
+            seed=original_metadata.seed,
+            llm_mode=bool(original_metadata.llm_mode),
+            owl_mode=original_metadata.owl_mode or "owl_lite",
+            llm_provider=original_metadata.llm_provider or "gemini",
+            llm_model=original_metadata.llm_model or "",
+            llm_thinking_level=original_metadata.llm_thinking_level or "",
+            llm_use_cache=True,
+            llm_global_cache_path=None,
+            llm_readonly_cache_paths=readonly_cache_paths,
+            llm_allow_missing_api_key=True,
         )
 
         # Set up orchestrator tracer for replay
@@ -83,6 +108,7 @@ class ReplayEngine:
         result["original_run_id"] = original_run_id
         result["matches_original"] = comparison.get("identical", False)
         result["diff_summary"] = comparison
+        result["llm_cache_stats"] = self._calculate_llm_cache_stats(new_run_id)
 
         return result
 
@@ -107,11 +133,27 @@ class ReplayEngine:
         with open(spec_path, "r", encoding="utf-8") as f:
             spec = yaml.safe_load(f)
 
+        original_run_id = spec.get("original_run_id")
+        readonly_cache_paths = []
+        if original_run_id and self.store.run_exists(original_run_id):
+            original_cache_path = self.output_dir / original_run_id / "llm_cache.jsonl"
+            if original_cache_path.exists() and original_cache_path.stat().st_size > 0:
+                readonly_cache_paths.append(str(original_cache_path))
+
         # Create orchestrator
         orchestrator = Orchestrator(
             corpus_dir=spec.get("corpus_dir", "demo_data/corpus"),
             output_dir=str(self.output_dir),
-            seed=spec.get("seed")
+            seed=spec.get("seed"),
+            llm_mode=bool(spec.get("llm_mode", spec.get("llm_enabled", False))),
+            owl_mode=spec.get("owl_mode", ""),
+            llm_provider=spec.get("llm_provider", ""),
+            llm_model=spec.get("llm_model", ""),
+            llm_thinking_level=spec.get("llm_thinking_level", ""),
+            llm_use_cache=bool(spec.get("llm_use_cache", True)),
+            llm_global_cache_path=None,
+            llm_readonly_cache_paths=readonly_cache_paths,
+            llm_allow_missing_api_key=True,
         )
 
         # Generate replay run ID
@@ -125,14 +167,31 @@ class ReplayEngine:
         )
 
         # If original_run_id specified, compare
-        original_run_id = spec.get("original_run_id")
         if original_run_id and self.store.run_exists(original_run_id):
             comparison = self.compare_runs(original_run_id, new_run_id)
             result["original_run_id"] = original_run_id
             result["matches_original"] = comparison.get("identical", False)
             result["diff_summary"] = comparison
+        result["llm_cache_stats"] = self._calculate_llm_cache_stats(new_run_id)
 
         return result
+
+    def _calculate_llm_cache_stats(self, run_id: str) -> dict:
+        """Compute cache-hit stats from trace events."""
+        entries = self.store.get_entries(run_id)
+        llm_calls = 0
+        cache_hits = 0
+        for entry in entries:
+            if entry.event_type.value == "llm_call":
+                llm_calls += 1
+            elif entry.event_type.value == "llm_cache_hit":
+                cache_hits += 1
+        hit_rate = (cache_hits / llm_calls) if llm_calls > 0 else 0.0
+        return {
+            "llm_calls": llm_calls,
+            "cache_hits": cache_hits,
+            "cache_hit_rate": hit_rate,
+        }
 
     def compare_runs(self, run_id_a: str, run_id_b: str) -> dict:
         """

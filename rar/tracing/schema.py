@@ -33,6 +33,12 @@ class TraceEventType(Enum):
     # Tool usage
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    LLM_CALL = "llm_call"
+    LLM_RESULT = "llm_result"
+    LLM_CACHE_HIT = "llm_cache_hit"
+    SCHEMA_VIOLATION = "schema_violation"
+    ARG_GRAPH_OK = "arg_graph_ok"
+    ARG_GRAPH_FAILED = "arg_graph_failed"
 
     # Task/workflow
     TASK_START = "task_start"
@@ -105,6 +111,9 @@ class TraceEntry:
     tool_input: dict = field(default_factory=dict)
     tool_output: Any = None
     tool_output_hash: str = ""
+
+    # LLM info
+    llm: dict = field(default_factory=dict)
 
     # Evidence
     evidence_anchors: list = field(default_factory=list)
@@ -181,6 +190,15 @@ class TraceEntry:
             lines.append(f"      Performative: {self.performative}")
         if self.tool_name:
             lines.append(f"      Tool: {self.tool_name}")
+        if self.llm:
+            model = self.llm.get("model", "")
+            thinking = self.llm.get("thinking_level", "")
+            cache_hit = self.llm.get("is_cache_hit", False)
+            llm_parts = [p for p in [model, thinking] if p]
+            if llm_parts:
+                lines.append(f"      LLM: {' / '.join(llm_parts)}")
+            if cache_hit:
+                lines.append("      LLM Cache: hit")
         if self.content_summary:
             lines.append(f"      Summary: {self.content_summary}")
         if self.evidence_anchors:
@@ -202,12 +220,20 @@ class RunMetadata:
     task_description: str
     start_time: str
     end_time: str = ""
-    status: str = "running"  # running, completed, failed, replayed
+    status: str = "running"  # running, waiting, completed, completed_with_warnings, failed, replayed
 
     # Configuration
     spec_file: str = ""
     seed: Optional[int] = None
     llm_mode: bool = False
+    owl_mode: str = ""
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_thinking_level: str = ""
+    finalize_missing: bool = False
+    llm_finalize_called: bool = False
+    argument_graph_generated: bool = False
+    next_run_at: str = ""
 
     # Summary stats
     total_steps: int = 0

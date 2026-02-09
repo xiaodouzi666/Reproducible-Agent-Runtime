@@ -1,5 +1,7 @@
 # RAR - Reproducible Agent Runtime
 
+![RAR Logo](logo.png)
+
 A traceable, replayable, and comparable multi-agent execution and audit framework for AI4S (AI for Science) applications.
 
 ## Quick Start (1 minute)
@@ -24,6 +26,24 @@ python run.py run "What methods are used to calculate activation energy?"
 - **Evidence Chain**: Every conclusion linked to source documents with citations
 - **Replay**: Reproduce any previous run with `--replay` flag
 - **Diff Comparison**: Compare two runs to analyze differences
+
+## Public Demo
+
+- **Public Project Link (replace before submission):** `<YOUR_PUBLIC_DEMO_URL>`
+- The demo link should be publicly accessible without login or paywall.
+- Recommended default demo path: run -> trace -> evidence -> replay/diff.
+
+## Completion Semantics
+
+- `completed`: finalize success and no major warnings.
+- `completed_with_warnings`: finalize success but outstanding challenges OR optional modules failed (for example, argument graph best-effort generation).
+- `failed`: finalize missing (for example, repeated schema/LLM failures).
+- `waiting`: planner requested `wait_seconds`/`wait_until`; checkpoint is saved and the run can be resumed.
+
+### Finalize-first invariant
+
+`structured_finalize` is the hard completion gate. Optional modules are best-effort and must not block finalize.  
+Examples: argument graph generation, checkpoint write/read, and other enrichments can emit warnings, but they cannot flip a finalized run to `failed`.
 
 ## Architecture
 
@@ -59,6 +79,7 @@ python run.py run --spec demo_data/tasks/task1.yaml --seed 42
 
 # Replay a previous run
 python run.py replay <run_id>
+python run.py resume <run_id>   # Resume a waiting run from checkpoint
 
 # Compare two runs
 python run.py diff <run_id_a> <run_id_b> --save
@@ -98,7 +119,13 @@ The UI provides:
 - **Run Task**: Execute new tasks with real-time progress
 - **Replay**: Re-run previous executions
 - **Diff**: Compare two runs side-by-side
-- **History**: Browse all past runs
+- **History**: Browse all past runs and resume waiting runs
+
+## Devpost Materials
+
+- Gemini integration brief write-up: `docs/devpost_gemini_integration_200words.md`
+- Testing checklist (live run, replay, OWL Full best-effort graph, WAIT/resume): `docs/testing.md`
+- 3-minute demo flow script: `docs/demo_script.md`
 
 ## Project Structure
 

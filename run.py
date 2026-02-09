@@ -6,6 +6,7 @@ Command Line Interface
 Usage:
     python run.py run "Your task description"
     python run.py run --spec demo_data/tasks/task1.yaml
+    python run.py resume <run_id>
     python run.py replay <run_id>
     python run.py replay --spec demo_data/tasks/task1.yaml
     python run.py diff <run_id_a> <run_id_b>
@@ -16,20 +17,43 @@ Usage:
 import argparse
 import sys
 import json
+from datetime import datetime
 from pathlib import Path
+import yaml
 
 from rar.orchestrator import Orchestrator
 from rar.replay import ReplayEngine
 from rar.diff import DiffEngine, DiffReport
-from rar.tracing import TraceStore
+from rar.tracing import TraceStore, Tracer
 
 
 def cmd_run(args):
     """Run a new task."""
+    llm_kwargs = {}
+    if getattr(args, "enable_gemini", False):
+        try:
+            from rar.llm import GeminiClient
+            resolved = GeminiClient.resolve_mode_defaults(
+                mode=args.mode,
+                model_override=args.model,
+                thinking_override=args.thinking_level,
+            )
+            llm_kwargs = {
+                "llm_mode": True,
+                "owl_mode": resolved["mode"],
+                "llm_provider": "gemini",
+                "llm_model": resolved["model"],
+                "llm_thinking_level": resolved["thinking_level"],
+            }
+        except Exception as e:
+            print(f"Warning: Gemini mode requested but unavailable: {e}")
+            print("Falling back to non-LLM workflow.")
+
     orchestrator = Orchestrator(
         corpus_dir=args.corpus,
         output_dir=args.output,
-        seed=args.seed
+        seed=args.seed,
+        **llm_kwargs,
     )
 
     if args.spec:
@@ -81,6 +105,14 @@ def cmd_replay(args):
     print(f"Original Run ID: {result.get('original_run_id', 'N/A')}")
     print(f"Success: {result.get('success', False)}")
     print(f"Matches Original: {result.get('matches_original', 'N/A')}")
+
+    cache_stats = result.get("llm_cache_stats", {}) or {}
+    if cache_stats:
+        print(
+            "LLM Cache Hit Rate: "
+            f"{cache_stats.get('cache_hits', 0)}/{cache_stats.get('llm_calls', 0)} "
+            f"({cache_stats.get('cache_hit_rate', 0.0):.1%})"
+        )
 
     if result.get('diff_summary'):
         diff = result['diff_summary']
@@ -155,6 +187,14 @@ def cmd_show(args):
     print(f"Start: {metadata.start_time}")
     print(f"End: {metadata.end_time}")
     print(f"Seed: {metadata.seed}")
+    print(f"LLM Mode: {metadata.llm_mode}")
+    print(f"OWL Mode: {metadata.owl_mode or 'N/A'}")
+    print(f"LLM Model: {metadata.llm_model or 'N/A'}")
+    print(f"Thinking Level: {metadata.llm_thinking_level or 'N/A'}")
+    print(f"LLM Finalize Called: {getattr(metadata, 'llm_finalize_called', False)}")
+    print(f"Finalize Missing: {getattr(metadata, 'finalize_missing', False)}")
+    print(f"Argument Graph Generated: {getattr(metadata, 'argument_graph_generated', False)}")
+    print(f"Next Run At: {getattr(metadata, 'next_run_at', '') or 'N/A'}")
     print(f"Is Replay: {metadata.is_replay}")
     if metadata.is_replay:
         print(f"Original Run: {metadata.original_run_id}")
@@ -174,6 +214,250 @@ def cmd_show(args):
     return 0
 
 
+def cmd_llm_test(args):
+    """Minimal Gemini connectivity test with trace logging."""
+    try:
+        from rar.llm import GeminiClient, GeminiClientError
+    except Exception as e:
+        print(f"Failed to import Gemini integration: {e}")
+        return 1
+
+    resolved = GeminiClient.resolve_mode_defaults(
+        mode=args.mode,
+        model_override=args.model,
+        thinking_override=args.thinking_level,
+    )
+    mode = resolved["mode"]
+    model = resolved["model"]
+    thinking_level = resolved["thinking_level"]
+
+    run_id = args.run_id or f"llm_test_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    run_dir = Path(args.output) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    store = TraceStore(args.output)
+    tracer = Tracer(run_id=run_id, store=store)
+    tracer.start_run(
+        task_description=args.prompt,
+        seed=args.seed,
+        llm_mode=True,
+        owl_mode=mode,
+        llm_provider="gemini",
+        llm_model=model,
+        llm_thinking_level=thinking_level,
+    )
+
+    try:
+        client = GeminiClient(
+            run_dir=str(run_dir),
+            auto_fallback=True,
+        )
+
+        cache_key = client.compute_cache_key(
+            prompt=args.prompt,
+            model=model,
+            thinking_level=thinking_level,
+            system_prompt=args.system_prompt,
+            response_format="text",
+        )
+        request_payload = {
+            "provider": "gemini",
+            "model": model,
+            "thinking_level": thinking_level,
+            "prompt": args.prompt,
+            "system_prompt": args.system_prompt or "",
+            "tools_schema": [],
+            "response_format": "text",
+        }
+        config_payload = {
+            "thinking_level": thinking_level,
+            "system_prompt": args.system_prompt or "",
+            "tool_schema_names": [],
+            "response_mime_type": "text/plain",
+        }
+
+        tracer.log_llm_call(
+            agent_id="llm_tester",
+            model=model,
+            thinking_level=thinking_level,
+            cache_key=cache_key,
+            prompt_summary=args.prompt[:200],
+            tool_schema_names=[],
+            request=request_payload,
+            config=config_payload,
+        )
+
+        record = client.generate_text(
+            prompt=args.prompt,
+            model=model,
+            thinking_level=thinking_level,
+            system_prompt=args.system_prompt,
+        )
+
+        if record.is_cache_hit:
+            tracer.log_llm_cache_hit(
+                agent_id="llm_tester",
+                model=record.model,
+                thinking_level=record.thinking_level,
+                cache_key=record.cache_key,
+                response_hash=record.response_hash,
+                usage=record.usage,
+                latency_ms=record.latency_ms,
+            )
+
+        tracer.log_llm_result(
+            agent_id="llm_tester",
+            cache_key=record.cache_key,
+            response_text_summary=(record.response_text or "")[:300],
+            response_hash=record.response_hash,
+            usage=record.usage,
+            model=record.model,
+            thinking_level=record.thinking_level,
+            deterministic=record.is_cache_hit,
+            latency_ms=record.latency_ms,
+            response_text=record.response_text,
+            response_raw=record.response_raw,
+        )
+
+        final_answer = record.response_text or "(empty response)"
+        tracer.end_run(
+            status="completed",
+            final_answer=final_answer,
+            evidence_summary=[],
+        )
+
+        # Save run spec/final summary for consistent run artifacts.
+        run_spec = {
+            "task": args.prompt,
+            "run_id": run_id,
+            "seed": args.seed,
+            "owl_mode": mode,
+            "llm_provider": "gemini",
+            "llm_model": record.model,
+            "llm_thinking_level": record.thinking_level,
+        }
+        with open(run_dir / "run_spec.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(run_spec, f, allow_unicode=True, default_flow_style=False)
+
+        final = {
+            "run_id": run_id,
+            "task": args.prompt,
+            "answer": final_answer,
+            "status": "completed",
+            "llm": {
+                "provider": "gemini",
+                "mode": mode,
+                "model": record.model,
+                "thinking_level": record.thinking_level,
+                "cache_key": record.cache_key,
+                "cache_hit": record.is_cache_hit,
+                "response_hash": record.response_hash,
+                "usage": record.usage,
+                "fallback_from": record.fallback_from,
+            },
+        }
+        with open(run_dir / "final.json", "w", encoding="utf-8") as f:
+            json.dump(final, f, ensure_ascii=False, indent=2, default=str)
+
+        print("\n" + "=" * 60)
+        print("LLM TEST COMPLETED")
+        print("=" * 60)
+        print(f"Run ID: {run_id}")
+        print(f"Mode: {mode}")
+        print(f"Model: {record.model}")
+        print(f"Thinking Level: {record.thinking_level}")
+        print(f"Cache Hit: {record.is_cache_hit}")
+        print(f"Response Hash: {record.response_hash[:16]}...")
+        if record.fallback_from:
+            print(f"Fallback Applied: {record.fallback_from} -> {record.model}")
+        print("\n--- Response ---")
+        print(final_answer)
+        return 0
+
+    except GeminiClientError as e:
+        tracer.end_run(status="failed", final_answer=f"LLM error: {e}")
+        print("\nGemini call failed.")
+        print(f"Error: {e}")
+        print("Hint: verify GEMINI_API_KEY and quota; retry with --mode owl_lite.")
+        return 1
+    except Exception as e:
+        tracer.end_run(status="failed", final_answer=f"Unexpected error: {e}")
+        print(f"\nUnexpected llm-test error: {e}")
+        return 1
+
+
+def cmd_resume(args):
+    """Resume a waiting/paused run from checkpoint."""
+    store = TraceStore(args.output)
+    metadata = store.get_metadata(args.run_id)
+    if not metadata:
+        print(f"Run not found: {args.run_id}")
+        return 1
+
+    task_description = args.task or metadata.task_description
+    llm_mode = bool(metadata.llm_mode or args.enable_gemini)
+    llm_kwargs = {}
+
+    if llm_mode:
+        mode = args.mode or metadata.owl_mode or "owl_lite"
+        model = args.model or metadata.llm_model or ""
+        thinking = args.thinking_level or metadata.llm_thinking_level or ""
+        try:
+            from rar.llm import GeminiClient
+
+            resolved = GeminiClient.resolve_mode_defaults(
+                mode=mode,
+                model_override=model or None,
+                thinking_override=thinking or None,
+            )
+            llm_kwargs = {
+                "llm_mode": True,
+                "owl_mode": resolved["mode"],
+                "llm_provider": "gemini",
+                "llm_model": resolved["model"],
+                "llm_thinking_level": resolved["thinking_level"],
+            }
+        except Exception as e:
+            print(f"Warning: resume requested with Gemini but setup failed: {e}")
+            print("Falling back to non-LLM resume path.")
+            llm_kwargs = {
+                "llm_mode": False,
+                "owl_mode": metadata.owl_mode or "owl_lite",
+            }
+    else:
+        llm_kwargs = {
+            "llm_mode": False,
+            "owl_mode": metadata.owl_mode or "owl_lite",
+        }
+
+    orchestrator = Orchestrator(
+        corpus_dir=args.corpus,
+        output_dir=args.output,
+        seed=args.seed if args.seed is not None else metadata.seed,
+        marathon_context={
+            "enabled": True,
+            "resume": True,
+            "source_run_id": args.run_id,
+        },
+        **llm_kwargs,
+    )
+
+    result = orchestrator.run(task_description)
+
+    print("\n" + "=" * 60)
+    print("RESUME COMPLETED")
+    print("=" * 60)
+    print(f"Run ID: {result.get('run_id', 'N/A')}")
+    print(f"Source Run ID: {args.run_id}")
+    print(f"Success: {result.get('success', False)}")
+    if result.get("run_status") == "waiting":
+        print(f"Next Run At: {result.get('next_run_at', '') or 'N/A'}")
+    print("\n--- Final Answer ---")
+    print(result.get("final_answer", result.get("error", "No answer")))
+
+    return 0 if result.get("success") else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RAR - Reproducible Agent Runtime CLI",
@@ -182,8 +466,10 @@ def main():
 Examples:
   python run.py run "What is the activation energy for thermal decomposition?"
   python run.py run --spec demo_data/tasks/task1.yaml --seed 42
+  python run.py resume run_20240101_120000_abc123
   python run.py replay run_20240101_120000_abc123
   python run.py diff run_a run_b --save
+  python run.py llm-test --mode owl_lite --prompt "Say hi"
   python run.py list
   python run.py show run_20240101_120000_abc123 --trace
         """
@@ -204,11 +490,29 @@ Examples:
     run_parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
     run_parser.add_argument("--verbose", "-v", action="store_true",
                             help="Show verbose output")
+    run_parser.add_argument("--enable-gemini", action="store_true",
+                            help="Store Gemini mode/model/thinking config in run metadata/spec")
+    run_parser.add_argument("--mode", choices=["owl_lite", "owl_dl", "owl_full"],
+                            default="owl_lite", help="OWL mode preset for Gemini metadata")
+    run_parser.add_argument("--model", help="Optional Gemini model override")
+    run_parser.add_argument("--thinking-level", help="Optional thinking level override")
 
     # Replay command
     replay_parser = subparsers.add_parser("replay", help="Replay a previous run")
     replay_parser.add_argument("run_id", nargs="?", help="Run ID to replay")
     replay_parser.add_argument("--spec", "-s", help="Path to replay spec YAML file")
+
+    # Resume command
+    resume_parser = subparsers.add_parser("resume", help="Resume a waiting run from checkpoint")
+    resume_parser.add_argument("run_id", help="Run ID to resume from checkpoint")
+    resume_parser.add_argument("--task", help="Optional task override")
+    resume_parser.add_argument("--seed", type=int, help="Optional seed override")
+    resume_parser.add_argument("--enable-gemini", action="store_true",
+                               help="Force-enable Gemini resume path")
+    resume_parser.add_argument("--mode", choices=["owl_lite", "owl_dl", "owl_full"],
+                               help="Optional OWL mode override")
+    resume_parser.add_argument("--model", help="Optional Gemini model override")
+    resume_parser.add_argument("--thinking-level", help="Optional thinking level override")
 
     # Diff command
     diff_parser = subparsers.add_parser("diff", help="Compare two runs")
@@ -230,6 +534,18 @@ Examples:
     show_parser.add_argument("--limit", "-n", type=int, default=50,
                              help="Maximum trace entries to show")
 
+    # LLM test command
+    llm_parser = subparsers.add_parser("llm-test", help="Run a minimal Gemini call with tracing")
+    llm_parser.add_argument("--prompt", default="Say hi in one concise sentence.",
+                            help="Prompt sent to Gemini")
+    llm_parser.add_argument("--mode", choices=["owl_lite", "owl_dl", "owl_full"],
+                            default="owl_lite", help="OWL mode preset")
+    llm_parser.add_argument("--model", help="Optional model override")
+    llm_parser.add_argument("--thinking-level", help="Optional thinking level override")
+    llm_parser.add_argument("--system-prompt", help="Optional system prompt")
+    llm_parser.add_argument("--seed", type=int, default=42, help="Seed stored in run metadata")
+    llm_parser.add_argument("--run-id", help="Optional explicit run ID")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -239,10 +555,12 @@ Examples:
     # Dispatch to command
     commands = {
         "run": cmd_run,
+        "resume": cmd_resume,
         "replay": cmd_replay,
         "diff": cmd_diff,
         "list": cmd_list,
         "show": cmd_show,
+        "llm-test": cmd_llm_test,
     }
 
     return commands[args.command](args)

@@ -7,7 +7,7 @@ from typing import Optional
 from difflib import unified_diff, SequenceMatcher
 import json
 
-from ..tracing import TraceStore, TraceEntry, RunMetadata
+from ..tracing import TraceStore, TraceEntry, RunMetadata, TraceEventType
 
 
 @dataclass
@@ -49,6 +49,18 @@ class DiffReport:
     evidence_count_b: int = 0
     common_evidence: int = 0
 
+    # LLM/mode configuration comparison
+    llm_config_a: dict = field(default_factory=dict)
+    llm_config_b: dict = field(default_factory=dict)
+    llm_config_diffs: list = field(default_factory=list)
+
+    # LLM call-level comparison
+    llm_calls_a: int = 0
+    llm_calls_b: int = 0
+    llm_cache_hits_a: int = 0
+    llm_cache_hits_b: int = 0
+    llm_call_diffs: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -88,6 +100,12 @@ class DiffEngine:
 
         # Compare answers
         self._compare_answers(report, metadata_a, metadata_b)
+
+        # Compare run-level LLM/mode configuration
+        self._compare_llm_config(report, metadata_a, metadata_b)
+
+        # Compare LLM call outputs
+        self._compare_llm_calls(report, entries_a, entries_b)
 
         # Compare steps
         self._compare_steps(report, entries_a, entries_b)
@@ -195,6 +213,130 @@ class DiffEngine:
 
         report.matching_steps = matching
         report.different_steps = different
+
+    def _compare_llm_config(
+        self,
+        report: DiffReport,
+        metadata_a: RunMetadata,
+        metadata_b: RunMetadata
+    ):
+        """Compare run-level LLM/mode configuration."""
+        report.llm_config_a = {
+            "llm_enabled": bool(metadata_a.llm_mode),
+            "owl_mode": metadata_a.owl_mode or "",
+            "llm_provider": metadata_a.llm_provider or "",
+            "llm_model": metadata_a.llm_model or "",
+            "llm_thinking_level": metadata_a.llm_thinking_level or "",
+            "finalize_missing": bool(getattr(metadata_a, "finalize_missing", False)),
+            "llm_finalize_called": bool(getattr(metadata_a, "llm_finalize_called", False)),
+        }
+        report.llm_config_b = {
+            "llm_enabled": bool(metadata_b.llm_mode),
+            "owl_mode": metadata_b.owl_mode or "",
+            "llm_provider": metadata_b.llm_provider or "",
+            "llm_model": metadata_b.llm_model or "",
+            "llm_thinking_level": metadata_b.llm_thinking_level or "",
+            "finalize_missing": bool(getattr(metadata_b, "finalize_missing", False)),
+            "llm_finalize_called": bool(getattr(metadata_b, "llm_finalize_called", False)),
+        }
+
+        all_keys = sorted(set(report.llm_config_a.keys()) | set(report.llm_config_b.keys()))
+        for key in all_keys:
+            value_a = report.llm_config_a.get(key)
+            value_b = report.llm_config_b.get(key)
+            if value_a != value_b:
+                report.llm_config_diffs.append(
+                    {
+                        "field": key,
+                        "value_a": value_a,
+                        "value_b": value_b,
+                    }
+                )
+
+    def _compare_llm_calls(
+        self,
+        report: DiffReport,
+        entries_a: list[TraceEntry],
+        entries_b: list[TraceEntry],
+    ):
+        """Compare call-level LLM outputs via cache_key/response_hash."""
+
+        def extract(entries: list[TraceEntry]) -> tuple[dict[str, dict], int, int]:
+            llm_results: dict[str, dict] = {}
+            llm_calls = 0
+            cache_hits = 0
+            fallback_idx = 0
+
+            for entry in entries:
+                if entry.event_type == TraceEventType.LLM_CALL:
+                    llm_calls += 1
+                elif entry.event_type == TraceEventType.LLM_CACHE_HIT:
+                    cache_hits += 1
+
+                if entry.event_type != TraceEventType.LLM_RESULT:
+                    continue
+                llm = entry.llm if isinstance(entry.llm, dict) else {}
+                cache_key = str(llm.get("cache_key", "") or "").strip()
+                if not cache_key:
+                    fallback_idx += 1
+                    cache_key = f"__idx_{fallback_idx}"
+                llm_results[cache_key] = {
+                    "response_hash": str(llm.get("response_hash", "") or ""),
+                    "model": str(llm.get("model", "") or ""),
+                    "thinking_level": str(llm.get("thinking_level", "") or ""),
+                    "step_id": entry.step_id,
+                }
+            return llm_results, llm_calls, cache_hits
+
+        map_a, calls_a, hits_a = extract(entries_a)
+        map_b, calls_b, hits_b = extract(entries_b)
+        report.llm_calls_a = calls_a
+        report.llm_calls_b = calls_b
+        report.llm_cache_hits_a = hits_a
+        report.llm_cache_hits_b = hits_b
+
+        all_keys = sorted(set(map_a.keys()) | set(map_b.keys()))
+        for key in all_keys:
+            left = map_a.get(key)
+            right = map_b.get(key)
+            if left is None:
+                report.llm_call_diffs.append(
+                    {
+                        "cache_key": key,
+                        "status": "missing_in_a",
+                        "b": right,
+                    }
+                )
+                continue
+            if right is None:
+                report.llm_call_diffs.append(
+                    {
+                        "cache_key": key,
+                        "status": "missing_in_b",
+                        "a": left,
+                    }
+                )
+                continue
+
+            if (
+                left.get("response_hash") != right.get("response_hash")
+                or left.get("model") != right.get("model")
+                or left.get("thinking_level") != right.get("thinking_level")
+            ):
+                report.llm_call_diffs.append(
+                    {
+                        "cache_key": key,
+                        "status": "changed",
+                        "hash_a": left.get("response_hash"),
+                        "hash_b": right.get("response_hash"),
+                        "model_a": left.get("model"),
+                        "model_b": right.get("model"),
+                        "thinking_a": left.get("thinking_level"),
+                        "thinking_b": right.get("thinking_level"),
+                        "step_a": left.get("step_id"),
+                        "step_b": right.get("step_id"),
+                    }
+                )
 
     def _compare_costs(
         self,
@@ -318,6 +460,47 @@ class DiffEngine:
                 lines.append(f"  {line.rstrip()}")
             if len(report.answer_diff) > 20:
                 lines.append(f"  ... ({len(report.answer_diff) - 20} more lines)")
+
+        lines.extend([
+            "",
+            "─" * 40,
+            "LLM CONFIGURATION",
+            "─" * 40,
+        ])
+
+        if report.llm_config_diffs:
+            lines.append("Differences:")
+            for diff in report.llm_config_diffs:
+                lines.append(
+                    f"  {diff['field']}: {diff['value_a']} -> {diff['value_b']}"
+                )
+        else:
+            lines.append("LLM/mode config identical")
+
+        lines.extend([
+            "",
+            "─" * 40,
+            "LLM CALL DIFF",
+            "─" * 40,
+            f"LLM Calls A: {report.llm_calls_a} (cache hits: {report.llm_cache_hits_a})",
+            f"LLM Calls B: {report.llm_calls_b} (cache hits: {report.llm_cache_hits_b})",
+        ])
+
+        if report.llm_call_diffs:
+            lines.append("Differences:")
+            for diff in report.llm_call_diffs[:10]:
+                status = diff.get("status", "")
+                lines.append(f"  {diff.get('cache_key', '')}: {status}")
+                if status == "changed":
+                    lines.append(
+                        f"    hash: {diff.get('hash_a', '')[:12]} -> {diff.get('hash_b', '')[:12]}"
+                    )
+                    lines.append(
+                        f"    model/thinking: {diff.get('model_a', '')}/{diff.get('thinking_a', '')} -> "
+                        f"{diff.get('model_b', '')}/{diff.get('thinking_b', '')}"
+                    )
+        else:
+            lines.append("LLM call outputs identical")
 
         lines.extend([
             "",
